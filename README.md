@@ -16,3 +16,12 @@ I'm really not proud of the code quality, wrote this script over the weekend to
 address my wife's frustration with MCA. Some of the ugliness is due to MCA's website
 rudimentary backend, which relies on the user sessions (the requests must go in the
 correct order), and only returns `text/html` content type.
+
+## Improvements
+
+- Split code into files
+- Fetch activity names for the given IDs
+- Generate random user session IDs
+- Use proper logging, including exceptions
+- Notify about exceptions
+- Add Build and Run sections to this README
