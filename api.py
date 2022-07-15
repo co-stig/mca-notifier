@@ -6,6 +6,10 @@ import re
 import time
 from bs4 import BeautifulSoup
 from pushover import Client
+from oauth2client import client, file, tools
+from googleapiclient.http import build_http
+from googleapiclient import discovery
+
 
 class Site:
     def __init__(self):
@@ -16,17 +20,48 @@ class Site:
         self.center = settings['Center']
         self.password = settings['Password']
         self.data_file = settings['DataFile']
+        self.calendar_file = settings['CalendarFile']
         self.activities = settings['Activities'].split(',')
         self.level = int(settings['Level'])
         self.sleep = int(settings['Sleep'])
         self.log_enabled = settings['Log'] == 'True'
+        self.calendar_id = settings['CalendarId']
+
+        # Initialize Google Calendar client
+        self._initialize_calendar_client()
+
+        # Initialize Pushover client
         self.pushover_client = Client(
             settings['PushoverUserKey'],
             api_token=settings['PushoverApiToken']
         )
+
+        # Read existing data and calendar events
         with open(self.data_file, 'r') as f:
             self.data = json.load(f)
+        with open(self.calendar_file, 'r') as f:
+            self.calendar_data = json.load(f)
+
+        # Login into MCA
         self._login()
+
+    def _initialize_calendar_client(self):
+        flow = client.flow_from_clientsecrets(
+            "client_secrets.json",
+            scope="https://www.googleapis.com/auth/calendar.events"
+        )
+        storage = file.Storage("calendar.dat")
+        credentials = storage.get()
+        if credentials is None or credentials.invalid:
+            credentials = tools.run_flow(flow, storage)
+        http = credentials.authorize(http=build_http())
+        self.calendar_client = discovery.build("calendar", "v3", http=http)
+
+    def _add_calendar_event(self, name, date, time_from, time_to):
+        return self.calendar_client.events().quickAdd(
+            calendarId=self.calendar_id,
+            text=f'{name} on {date} {time_from} - {time_to}'
+        ).execute()
 
     def _get_all_nested(self):
         json_all = {}
@@ -74,6 +109,31 @@ class Site:
                         })
         return flat
 
+    def _get_all_events_flat(self):
+        flat = list()
+
+        reservations = self._send_get(f'espace-perso/reservations/')
+        self._log(reservations, f"Getting list of reservations")
+        soup = BeautifulSoup(reservations.text, 'html.parser')
+
+        for table in soup.find_all('table'):
+            for tr in list(table.children):
+                if tr.name == 'tr':
+                    l = list(tr.children)
+                    if len(l) == 5:
+                        if list(l[1].children)[0].strip() == 'Activité:':
+                            descr = list(l[3].children)[0].strip()
+                            # Aquabiking Noir le vendredi 29/07/2022 de 18h15 à 19h00 (45 minutes)
+                            m = re.search("(.+) le .+ (\\d+)/(\\d+)/(\\d+) de (\\d+)h(\\d+) à (\\d+)h(\\d+) .+", descr)
+                            if m is not None:
+                                flat.append({
+                                    'event_type': m.group(1),
+                                    'event_date': f'{m.group(4)}-{m.group(3)}-{m.group(2)}',
+                                    'event_from': f'{m.group(5)}:{m.group(6)}',
+                                    'event_to': f'{m.group(7)}:{m.group(8)}',
+                                })
+        return flat
+
     # Main entry point into this class
     def update(self, save):
         new = self._get_all_flat()
@@ -83,7 +143,14 @@ class Site:
             print(f'Sent: {msg}')
         if save:
             self._save(new)
-        return added
+
+        new_events = self._get_all_events_flat()
+        added_events = self._calculate_events_diff(new_events)
+        self._create_events(added_events)
+        if save:
+            self._save_calendar(new_events)
+
+        return added, added_events
 
     def _send_get(self, url):
         return self.session.get(
@@ -198,7 +265,22 @@ class Site:
                     break
             if is_added:
                 added.append(n)
+        return added
 
+    def _calculate_events_diff(self, new):
+        old = self.calendar_data
+        print (f'Calculating events diff between {len(old)} and {len(new)}')
+        added = list()
+        for n in new:
+            is_added = True
+            for o in old:
+                if n['event_type'] == o['event_type'] \
+                and n['event_date'] == o['event_date'] \
+                and n['event_from'] == o['event_from']:
+                    is_added = False
+                    break
+            if is_added:
+                added.append(n)
         return added
 
     def _send_if_needed(self, added):
@@ -207,10 +289,19 @@ class Site:
             self.pushover_client.send_message(msg, title="Mon Centre Aquatique")
             return msg
 
+    def _create_events(self, added_events):
+        for e in added_events:
+            self._add_calendar_event(e['event_type'], e['event_date'], e['event_from'], e['event_to'])
+
     def _save(self, new):
         self.data = new
         with open(self.data_file, 'w') as f:
             json.dump(self.data, f, indent=2)
+
+    def _save_calendar(self, new):
+        self.calendar_data = new
+        with open(self.calendar_file, 'w') as f:
+            json.dump(self.calendar_data, f, indent=2)
 
     def _log(self, res, name):
         if self.log_enabled:
@@ -244,8 +335,9 @@ if __name__ == '__main__':
     site = Site()
     while True:
         try:
-            d = site.update(save=True)
+            d, e = site.update(save=True)
             print(d)
+            print(e)
         except Exception as e:
             print(f'Error: {e}')
 

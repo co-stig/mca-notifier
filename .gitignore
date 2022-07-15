@@ -1,0 +1,6 @@
+.venv
+calendar.dat
+client_secrets.json
+__pycache__
+data.json
+calendar.json
