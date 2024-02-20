@@ -1,3 +1,4 @@
+import traceback
 import requests
 import pprint
 import configparser
@@ -28,7 +29,8 @@ class Site:
         self.calendar_id = settings['CalendarId']
 
         # Initialize Google Calendar client
-        self._initialize_calendar_client()
+        if self.calendar_id:
+            self._initialize_calendar_client()
 
         # Initialize Pushover client
         self.pushover_client = Client(
@@ -146,7 +148,8 @@ class Site:
 
         new_events = self._get_all_events_flat()
         added_events = self._calculate_events_diff(new_events)
-        self._create_events(added_events)
+        if self.calendar_id:
+            self._create_events(added_events)
         if save:
             self._save_calendar(new_events)
 
@@ -216,8 +219,10 @@ class Site:
                 last_date = str(l[0]).strip() + ', ' + str(l[2]).strip()
             elif style == 'padding:20px;text-align:left;vertical-align:middle;padding-right:50px;':
                 l = list(td.children)
-                if l[1].get('src', '?') == '/module-inscriptions/images/planning-vert.svg':
-                    onclick = l[1].get('onclick', '?')
+                s = list(l[1].children)
+                last_capacity = s[2].strip()
+                if s[1].get('src', '?') == '/module-inscriptions/images/personne_vert.svg':
+                    onclick = l[8].get('onclick', '?')
                     m = re.search('afficher_popup_reserver\((.+?),', onclick)
                     last_id = m.group(1)
                     res[last_id] = {
@@ -231,7 +236,6 @@ class Site:
                 last_time = list(l[1].children)[0].replace('\xa0', ' ')
                 s = list(l[5].children)
                 last_duration = s[1].strip()
-                last_capacity = s[3].strip()
 
         print(f'Availabilities: {res}')
         print()
@@ -340,6 +344,7 @@ if __name__ == '__main__':
             print(e)
         except Exception as e:
             print(f'Error: {e}')
+            print(traceback.format_exc())            
 
         time.sleep(site.sleep)
 
